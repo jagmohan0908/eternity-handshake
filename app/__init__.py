@@ -1,0 +1,2 @@
+"""Handshake MCP gateway package."""
+
