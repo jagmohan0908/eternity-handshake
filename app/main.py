@@ -17,6 +17,11 @@ APP_NAME = "handshake-mcp"
 frappe_write_lock = asyncio.Semaphore(int(os.getenv("MCP_FRAPPE_WRITE_CONCURRENCY", "2")))
 
 
+def log_event(event: str, **fields: Any) -> None:
+    safe_fields = {k: v for k, v in fields.items() if k not in {"authorization", "token", "secret"}}
+    print(json.dumps({"event": event, **safe_fields}, default=str), flush=True)
+
+
 def env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
@@ -277,21 +282,25 @@ def guarded_write(action: str, args: dict[str, Any], fn: Callable[[], dict[str, 
     existing = idempotency_get(args.get("idempotency_key"))
     if existing:
         audit(action, args, "duplicate", existing)
+        log_event("mcp_duplicate", action=action, status=existing.get("status"), idempotency_key=args.get("idempotency_key"))
         return {**existing, "duplicate": True}
     blocked = reserve_limit(action, args)
     if blocked:
         audit(action, args, "blocked", blocked)
         idempotency_set(args.get("idempotency_key"), blocked)
+        log_event("mcp_blocked", action=action, reason=blocked.get("reason"), idempotency_key=args.get("idempotency_key"))
         return blocked
     circuit = circuit_status(action)
     if circuit:
         audit(action, args, "deferred", circuit)
         idempotency_set(args.get("idempotency_key"), circuit)
+        log_event("mcp_deferred", action=action, reason=circuit.get("reason"), idempotency_key=args.get("idempotency_key"))
         return circuit
     try:
         result = fn()
         idempotency_set(args.get("idempotency_key"), result)
         audit(action, args, str(result.get("status", "accepted")), result)
+        log_event("mcp_result", action=action, status=result.get("status"), name=result.get("name"), idempotency_key=args.get("idempotency_key"))
         return result
     except FrappeError as exc:
         if exc.status_code in (429, 500, 502, 503, 504) or "Lock wait timeout" in str(exc):
@@ -301,6 +310,7 @@ def guarded_write(action: str, args: dict[str, Any], fn: Callable[[], dict[str, 
             result = {"status": "failed", "error": str(exc)[:500]}
         idempotency_set(args.get("idempotency_key"), result)
         audit(action, args, result["status"], result)
+        log_event("mcp_error", action=action, status=result["status"], error=result.get("error"), idempotency_key=args.get("idempotency_key"))
         return result
 
 
@@ -384,16 +394,24 @@ def create_appointment(args: dict[str, Any]) -> dict[str, Any]:
     if missing:
         return {"status": "failed", "error": f"missing required fields: {', '.join(missing)}"}
     doctype = os.getenv("FRAPPE_APPOINTMENT_DOCTYPE", "Patient Appointment")
+    customer_email = str(args.get("customer_email") or args.get("email") or "").strip()
+    if not customer_email:
+        fallback_domain = os.getenv("FRAPPE_APPOINTMENT_EMAIL_DOMAIN", "sriaas.invalid")
+        customer_email = f"{phone.replace('+', '')}@{fallback_domain}"
     payload = {
-        "patient_name": patient_name,
-        "patient_phone": phone,
-        "mobile": phone,
-        "appointment_date": preferred_time,
-        "preferred_time": preferred_time,
-        "notes": concern,
-        "department": args.get("doctor_team") or "Dr Health",
+        "scheduled_time": preferred_time,
         "status": os.getenv("FRAPPE_APPOINTMENT_DEFAULT_STATUS", "Open"),
+        "customer_name": patient_name,
+        "customer_phone_number": phone,
+        "customer_email": customer_email,
+        "customer_details": concern,
     }
+    appointment_with = os.getenv("FRAPPE_APPOINTMENT_WITH", "").strip()
+    party = os.getenv("FRAPPE_APPOINTMENT_PARTY", "").strip()
+    if appointment_with:
+        payload["appointment_with"] = appointment_with
+    if party:
+        payload["party"] = party
 
     def write() -> dict[str, Any]:
         created = frappe_request("POST", f"/api/resource/{doctype_path(doctype)}", json_body=payload)
@@ -452,8 +470,11 @@ class McpHandler(BaseHTTPRequestHandler):
             if not handler:
                 self.send_json(200, {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}})
                 return
-            self.send_json(200, {"jsonrpc": "2.0", "id": request_id, "result": handler(arguments)})
+            result = handler(arguments)
+            log_event("mcp_tool_call", tool=tool_name, status=result.get("status"), error=result.get("error"), idempotency_key=arguments.get("idempotency_key"))
+            self.send_json(200, {"jsonrpc": "2.0", "id": request_id, "result": result})
         except Exception as exc:
+            log_event("mcp_exception", error=str(exc))
             self.send_json(200, {"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": str(exc)}})
 
 
@@ -468,4 +489,3 @@ def run() -> None:
 
 if __name__ == "__main__":
     run()
-
