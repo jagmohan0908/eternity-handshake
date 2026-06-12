@@ -363,6 +363,17 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
 
     def write() -> dict[str, Any]:
         conversation = resolve_or_create_conversation(phone, str(channel_account))
+        log_event(
+            "whatsapp_template_request",
+            phone_suffix=phone[-4:],
+            conversation=conversation,
+            template_name=template_name,
+            channel_account=channel_account,
+            language_code=language_code,
+            body_value_count=len(body_values),
+            message_len=len(message),
+            idempotency_key=args.get("idempotency_key"),
+        )
         data = frappe_request(
             "POST",
             "/api/method/wa_chat_hub.api.runtime.send_template_message",
@@ -378,7 +389,31 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
             },
         )
         result = unwrap_result(data)
-        return {"status": "sent" if result.get("sent", True) else "accepted", "conversation": result.get("conversation") or conversation, "message": result.get("message"), "template_name": template_name}
+        sent_value = result.get("sent")
+        delivery_status = str(result.get("status") or result.get("delivery_status") or "").lower()
+        status = "sent" if sent_value is True or delivery_status in {"sent", "success", "delivered"} else "accepted"
+        if status != "sent":
+            log_event(
+                "whatsapp_template_not_confirmed_sent",
+                phone_suffix=phone[-4:],
+                conversation=result.get("conversation") or conversation,
+                template_name=template_name,
+                channel_account=channel_account,
+                sent=sent_value,
+                delivery_status=delivery_status,
+                frappe_result=json.dumps(result, default=str)[:1000],
+                idempotency_key=args.get("idempotency_key"),
+            )
+        return {
+            "status": status,
+            "conversation": result.get("conversation") or conversation,
+            "message": result.get("message"),
+            "template_name": template_name,
+            "channel_account": channel_account,
+            "delivery_status": delivery_status or None,
+            "sent": sent_value,
+            "frappe_result": result,
+        }
 
     return guarded_write("whatsapp", {**args, "phone": phone}, write)
 
