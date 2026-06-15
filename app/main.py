@@ -15,8 +15,6 @@ from urllib.error import HTTPError, URLError
 
 APP_NAME = "handshake-mcp"
 frappe_write_lock = asyncio.Semaphore(int(os.getenv("MCP_FRAPPE_WRITE_CONCURRENCY", "2")))
-DEFAULT_TENANT_KEY = "default"
-TENANT_KEY_FIELDS = ("tenant_key", "frappe_tenant", "company_key", "companyKey", "account_key", "frappe_account", "domain")
 
 
 def log_event(event: str, **fields: Any) -> None:
@@ -156,24 +154,11 @@ def limit_for_action(action: str) -> int:
     }.get(action, 1)
 
 
-def tenant_key_from_args(args: dict[str, Any]) -> str:
-    for field in TENANT_KEY_FIELDS:
-        value = str(args.get(field) or "").strip()
-        if value:
-            return value
-    return DEFAULT_TENANT_KEY
-
-
-def tenant_scope(args: dict[str, Any]) -> str:
-    return tenant_key_from_args(args).replace(":", "_")
-
-
 def reserve_limit(action: str, args: dict[str, Any]) -> dict[str, Any] | None:
     agent_id = str(args.get("agent_id") or "unknown-agent")
     call_id = str(args.get("call_id") or "unknown-call")
-    tenant = tenant_scope(args)
-    action_scope = f"{tenant}:{agent_id}:{call_id}:{action}"
-    total_scope = f"{tenant}:{agent_id}:{call_id}:total"
+    action_scope = f"{agent_id}:{call_id}:{action}"
+    total_scope = f"{agent_id}:{call_id}:total"
     now = time.time()
     with db_connect() as conn:
         action_count = conn.execute("select count from counters where scope = ?", (action_scope,)).fetchone()
@@ -210,105 +195,32 @@ def open_circuit(module: str, reason: str) -> None:
         )
 
 
-def _config_value(config: dict[str, Any], *keys: str, default: str = "") -> str:
-    for key in keys:
-        value = config.get(key)
-        if value:
-            return str(value)
-    return default
-
-
-def _load_tenant_configs() -> dict[str, dict[str, Any]]:
-    raw = os.getenv("FRAPPE_TENANTS_JSON", "").strip()
-    file_path = os.getenv("FRAPPE_TENANTS_FILE", "").strip()
-    if not raw and file_path:
-        try:
-            raw = Path(file_path).read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise FrappeError(f"Could not read FRAPPE_TENANTS_FILE: {exc}") from exc
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise FrappeError("FRAPPE_TENANTS_JSON is not valid JSON") from exc
-    if isinstance(parsed, dict) and isinstance(parsed.get("tenants"), dict):
-        parsed = parsed["tenants"]
-    if not isinstance(parsed, dict):
-        raise FrappeError("Frappe tenant config must be a JSON object")
-    tenants: dict[str, dict[str, Any]] = {}
-    for key, value in parsed.items():
-        if isinstance(value, dict):
-            tenants[str(key)] = value
-    return tenants
-
-
-def resolve_frappe_config(args: dict[str, Any]) -> dict[str, Any]:
-    tenant_key = tenant_key_from_args(args)
-    tenants = _load_tenant_configs()
-    if tenants and tenant_key != DEFAULT_TENANT_KEY and tenant_key not in tenants:
-        raise FrappeError(f"Unknown Frappe tenant: {tenant_key}")
-
-    default_config = tenants.get(DEFAULT_TENANT_KEY, {})
-    tenant_config = tenants.get(tenant_key, {}) if tenant_key != DEFAULT_TENANT_KEY else default_config
-    merged = {**default_config, **tenant_config}
-
-    return {
-        **merged,
-        "tenant_key": tenant_key,
-        "base_url": _config_value(merged, "base_url", "frappe_base_url", "frappeBaseUrl", "url", default=os.getenv("FRAPPE_BASE_URL") or os.getenv("FRAPPE_URL") or ""),
-        "authorization": _config_value(merged, "authorization", "auth", "frappe_authorization", default=os.getenv("FRAPPE_AUTHORIZATION", "")),
-        "api_key": _config_value(merged, "api_key", "frappe_api_key", default=os.getenv("FRAPPE_API_KEY", "")),
-        "api_secret": _config_value(merged, "api_secret", "frappe_api_secret", default=os.getenv("FRAPPE_API_SECRET", "")),
-        "origin": _config_value(merged, "origin", "frappe_origin", default=os.getenv("FRAPPE_ORIGIN", "")),
-        "referer": _config_value(merged, "referer", "frappe_referer", default=os.getenv("FRAPPE_REFERER", "")),
-        "accept_language": _config_value(merged, "accept_language", default=os.getenv("FRAPPE_ACCEPT_LANGUAGE", "en-US,en;q=0.9")),
-        "user_agent": _config_value(
-            merged,
-            "user_agent",
-            default=os.getenv(
-                "FRAPPE_USER_AGENT",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/125.0.0.0 Safari/537.36",
-            ),
-        ),
-        "extra_headers_json": _config_value(merged, "extra_headers_json", "extra_headers", default=os.getenv("FRAPPE_EXTRA_HEADERS_JSON", "")),
-        "default_template": _config_value(merged, "default_template", "wa_default_template", "template_name", default=os.getenv("WA_DEFAULT_TEMPLATE", "vobiz_dg")),
-        "default_channel_account": _config_value(merged, "default_channel_account", "wa_default_channel_account", "channel_account", default=os.getenv("WA_DEFAULT_CHANNEL_ACCOUNT", "Interakt SRIAAS Male")),
-        "default_language": _config_value(merged, "default_language", "wa_default_language", "language_code", default=os.getenv("WA_DEFAULT_LANGUAGE", "en")),
-    }
-
-
-def frappe_base_url(config: dict[str, Any]) -> str:
-    base_url = str(config.get("base_url") or "").strip()
-    if not base_url:
-        tenant_key = config.get("tenant_key") or DEFAULT_TENANT_KEY
-        raise FrappeError(f"Frappe base URL is not configured for tenant {tenant_key}")
-    return base_url.rstrip("/")
-
-
-def frappe_headers(config: dict[str, Any]) -> dict[str, str]:
-    auth = str(config.get("authorization") or "")
-    api_key = str(config.get("api_key") or "")
-    api_secret = str(config.get("api_secret") or "")
+def frappe_headers() -> dict[str, str]:
+    auth = os.getenv("FRAPPE_AUTHORIZATION", "")
+    api_key = os.getenv("FRAPPE_API_KEY", "")
+    api_secret = os.getenv("FRAPPE_API_SECRET", "")
     if not auth and api_key and api_secret:
         auth = f"token {api_key}:{api_secret}"
     if auth and not auth.lower().startswith(("token ", "bearer ")):
         auth = f"token {auth}"
-    base_url = frappe_base_url(config)
+    user_agent = os.getenv(
+        "FRAPPE_USER_AGENT",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36",
+    )
     headers = {
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": str(config.get("accept_language") or "en-US,en;q=0.9"),
+        "Accept-Language": os.getenv("FRAPPE_ACCEPT_LANGUAGE", "en-US,en;q=0.9"),
         "Cache-Control": "no-cache",
         "Content-Type": "application/json",
-        "Origin": str(config.get("origin") or base_url),
+        "Origin": os.getenv("FRAPPE_ORIGIN", frappe_base_url()),
         "Pragma": "no-cache",
-        "Referer": str(config.get("referer") or f"{base_url}/"),
-        "User-Agent": str(config.get("user_agent") or ""),
+        "Referer": os.getenv("FRAPPE_REFERER", f"{frappe_base_url()}/"),
+        "User-Agent": user_agent,
         "X-Requested-With": "XMLHttpRequest",
     }
-    extra_headers = str(config.get("extra_headers_json") or "").strip()
+    extra_headers = os.getenv("FRAPPE_EXTRA_HEADERS_JSON", "").strip()
     if extra_headers:
         try:
             parsed_headers = json.loads(extra_headers)
@@ -321,11 +233,18 @@ def frappe_headers(config: dict[str, Any]) -> dict[str, str]:
     return headers
 
 
-def frappe_request(method: str, path: str, *, config: dict[str, Any], json_body: dict[str, Any] | None = None, params: dict[str, Any] | None = None) -> dict[str, Any]:
+def frappe_base_url() -> str:
+    base_url = os.getenv("FRAPPE_BASE_URL") or os.getenv("FRAPPE_URL") or ""
+    if not base_url:
+        raise FrappeError("FRAPPE_BASE_URL is not configured")
+    return base_url.rstrip("/")
+
+
+def frappe_request(method: str, path: str, *, json_body: dict[str, Any] | None = None, params: dict[str, Any] | None = None) -> dict[str, Any]:
     query = f"?{urlencode(params)}" if params else ""
-    url = f"{frappe_base_url(config)}{path}{query}"
+    url = f"{frappe_base_url()}{path}{query}"
     body = json.dumps(json_body).encode("utf-8") if json_body is not None else None
-    request = Request(url, data=body, method=method, headers=frappe_headers(config))
+    request = Request(url, data=body, method=method, headers=frappe_headers())
     try:
         with urlopen(request, timeout=env_int("FRAPPE_TIMEOUT_SECONDS", 20)) as response:
             text = response.read().decode("utf-8")
@@ -355,7 +274,7 @@ def unwrap_result(data: dict[str, Any]) -> dict[str, Any]:
     return message if isinstance(message, dict) else {}
 
 
-def resolve_or_create_conversation(phone: str, channel_account: str, config: dict[str, Any]) -> str:
+def resolve_or_create_conversation(phone: str, channel_account: str) -> str:
     cleaned = normalize_phone(phone)
     candidates = [phone, cleaned, cleaned.removeprefix("+")]
     seen: set[str] = set()
@@ -366,7 +285,6 @@ def resolve_or_create_conversation(phone: str, channel_account: str, config: dic
         data = frappe_request(
             "POST",
             "/api/method/wa_chat_hub.api.chat.resolve_chat_for_reference",
-            config=config,
             json_body={"reference_doctype": "Chat Contact", "phone_number": candidate, "channel_account": channel_account},
         )
         conversation = unwrap_result(data).get("conversation") or unwrap_result(data).get("conversation_name") or unwrap_result(data).get("chat_conversation")
@@ -374,12 +292,12 @@ def resolve_or_create_conversation(phone: str, channel_account: str, config: dic
             return str(conversation)
 
     try:
-        contact_data = frappe_request("POST", "/api/resource/Chat%20Contact", config=config, json_body={"phone_number": cleaned or phone, "display_name": cleaned or phone})
+        contact_data = frappe_request("POST", "/api/resource/Chat%20Contact", json_body={"phone_number": cleaned or phone, "display_name": cleaned or phone})
         contact_name = (contact_data.get("data") or {}).get("name") or cleaned or phone
     except FrappeError:
         contact_name = cleaned or phone
 
-    convo_data = frappe_request("POST", "/api/resource/Chat%20Conversation", config=config, json_body={"channel_account": channel_account, "contact": contact_name, "status": "Open"})
+    convo_data = frappe_request("POST", "/api/resource/Chat%20Conversation", json_body={"channel_account": channel_account, "contact": contact_name, "status": "Open"})
     conversation = (convo_data.get("data") or {}).get("name")
     if not conversation:
         raise FrappeError("Could not resolve or create Chat Conversation")
@@ -398,8 +316,7 @@ def guarded_write(action: str, args: dict[str, Any], fn: Callable[[], dict[str, 
         idempotency_set(args.get("idempotency_key"), blocked)
         log_event("mcp_blocked", action=action, reason=blocked.get("reason"), idempotency_key=args.get("idempotency_key"))
         return blocked
-    circuit_module = f"{tenant_scope(args)}:{action}"
-    circuit = circuit_status(circuit_module)
+    circuit = circuit_status(action)
     if circuit:
         audit(action, args, "deferred", circuit)
         idempotency_set(args.get("idempotency_key"), circuit)
@@ -413,7 +330,7 @@ def guarded_write(action: str, args: dict[str, Any], fn: Callable[[], dict[str, 
         return result
     except FrappeError as exc:
         if exc.status_code in (429, 500, 502, 503, 504) or "Lock wait timeout" in str(exc):
-            open_circuit(circuit_module, str(exc)[:300])
+            open_circuit(action, str(exc)[:300])
             result = {"status": "deferred", "reason": "frappe_temporarily_unavailable", "error": str(exc)[:500]}
         else:
             result = {"status": "failed", "error": str(exc)[:500]}
@@ -430,24 +347,18 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
         return {"status": "failed", "error": "phone is required"}
     if not message:
         return {"status": "failed", "error": "message is required"}
-    try:
-        frappe_config = resolve_frappe_config(args)
-    except FrappeError as exc:
-        return {"status": "failed", "error": str(exc)}
-    tenant_key = str(frappe_config.get("tenant_key") or DEFAULT_TENANT_KEY)
-    template_name = args.get("template_name") or frappe_config.get("default_template") or "vobiz_dg"
-    channel_account = args.get("channel_account") or frappe_config.get("default_channel_account") or "Interakt SRIAAS Male"
-    language_code = args.get("language_code") or frappe_config.get("default_language") or "en"
+    template_name = args.get("template_name") or os.getenv("WA_DEFAULT_TEMPLATE", "vobiz_dg")
+    channel_account = args.get("channel_account") or os.getenv("WA_DEFAULT_CHANNEL_ACCOUNT", "Interakt SRIAAS Male")
+    language_code = args.get("language_code") or os.getenv("WA_DEFAULT_LANGUAGE", "en")
     body_values = args.get("body_values") or [message]
     expected_values = env_int("WA_TEMPLATE_VARIABLE_COUNT", 1)
     if not isinstance(body_values, list) or len(body_values) != expected_values:
         return {"status": "failed", "error": f"template expects {expected_values} body value(s)"}
 
     def write() -> dict[str, Any]:
-        conversation = resolve_or_create_conversation(phone, str(channel_account), frappe_config)
+        conversation = resolve_or_create_conversation(phone, str(channel_account))
         log_event(
             "whatsapp_template_request",
-            tenant_key=tenant_key,
             phone_suffix=phone[-4:],
             conversation=conversation,
             template_name=template_name,
@@ -460,7 +371,6 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
         data = frappe_request(
             "POST",
             "/api/method/wa_chat_hub.api.runtime.send_template_message",
-            config=frappe_config,
             json_body={
                 "conversation": conversation,
                 "template_name": template_name,
@@ -485,7 +395,6 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
         if status != "sent":
             log_event(
                 "whatsapp_template_not_confirmed_sent",
-                tenant_key=tenant_key,
                 phone_suffix=phone[-4:],
                 conversation=result.get("conversation") or conversation,
                 template_name=template_name,
@@ -499,7 +408,6 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
         return {
             "status": status,
             "conversation": result.get("conversation") or conversation,
-            "tenant_key": tenant_key,
             "message": result.get("message"),
             "template_name": template_name,
             "channel_account": channel_account,

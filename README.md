@@ -28,29 +28,6 @@ Set these in `.env`:
 - `WA_DEFAULT_TEMPLATE`
 - `WA_DEFAULT_CHANNEL_ACCOUNT`
 
-For multiple Frappe accounts, set `FRAPPE_TENANTS_JSON` instead of relying only on the single-account Frappe env vars. Agents can route a request by passing `tenant_key`, `frappe_tenant`, `company_key`, `account_key`, `frappe_account`, or `domain`.
-
-Example:
-
-```json
-{
-  "default": {
-    "base_url": "https://site-a.example.com",
-    "authorization": "token api_key:api_secret",
-    "default_template": "vobiz_ai",
-    "default_channel_account": "vobiz_main",
-    "default_language": "en"
-  },
-  "clinic_b": {
-    "base_url": "https://site-b.example.com",
-    "authorization": "token api_key:api_secret",
-    "default_template": "clinic_b_template",
-    "default_channel_account": "clinic_b_channel",
-    "default_language": "en"
-  }
-}
-```
-
 ## Agent Endpoint
 
 Use:
@@ -71,7 +48,6 @@ Example:
     "name": "send_whatsapp_template",
     "arguments": {
       "phone": "+919999999999",
-      "company_key": "default",
       "message": "Clinic address: B-92, near Millennium City Centre Metro Station, Gurugram.",
       "template_name": "vobiz_dg",
       "channel_account": "Interakt SRIAAS Male",
@@ -87,8 +63,8 @@ Example:
 
 ## Safety Defaults
 
-- WhatsApp sends: 1 per `tenant + agent_id + call_id`
-- Total Frappe calls: 10 per `tenant + agent_id + call_id`
+- WhatsApp sends: 1 per `agent_id + call_id`
+- Total Frappe calls: 10 per `agent_id + call_id`
 - Idempotency TTL: 24 hours
 - Frappe write concurrency: 2
 
