@@ -7,10 +7,8 @@ Agents call this service through JSON-RPC `tools/call`. This service owns Frappe
 ## Tools
 
 - `send_whatsapp_template`
-- `create_or_update_lead`
-- `create_appointment`
 
-The gateway intentionally exposes business tools instead of broad Frappe CRUD write access.
+The gateway intentionally exposes only the WhatsApp template sending tool instead of broad Frappe CRUD write access.
 
 ## Run Locally
 
@@ -66,8 +64,6 @@ Example:
 ## Safety Defaults
 
 - WhatsApp sends: 1 per `agent_id + call_id`
-- Lead writes: 1 per `agent_id + call_id`
-- Appointment writes: 1 per `agent_id + call_id`
 - Total Frappe calls: 10 per `agent_id + call_id`
 - Idempotency TTL: 24 hours
 - Frappe write concurrency: 2

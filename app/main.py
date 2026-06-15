@@ -151,8 +151,6 @@ def idempotency_set(key: str | None, result: dict[str, Any]) -> None:
 def limit_for_action(action: str) -> int:
     return {
         "whatsapp": env_int("MCP_MAX_WHATSAPP_SENDS_PER_CALL", 1),
-        "lead": env_int("MCP_MAX_LEAD_WRITES_PER_CALL", 1),
-        "appointment": env_int("MCP_MAX_APPOINTMENT_WRITES_PER_CALL", 1),
     }.get(action, 1)
 
 
@@ -276,10 +274,6 @@ def unwrap_result(data: dict[str, Any]) -> dict[str, Any]:
     return message if isinstance(message, dict) else {}
 
 
-def doctype_path(doctype: str) -> str:
-    return doctype.replace(" ", "%20")
-
-
 def resolve_or_create_conversation(phone: str, channel_account: str) -> str:
     cleaned = normalize_phone(phone)
     candidates = [phone, cleaned, cleaned.removeprefix("+")]
@@ -391,7 +385,13 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
         result = unwrap_result(data)
         sent_value = result.get("sent")
         delivery_status = str(result.get("status") or result.get("delivery_status") or "").lower()
-        status = "sent" if sent_value is True or delivery_status in {"sent", "success", "delivered"} else "accepted"
+        error_message = result.get("error")
+        if sent_value is True or delivery_status in {"sent", "success", "delivered"}:
+            status = "sent"
+        elif sent_value is False or delivery_status in {"failed", "error", "rejected"} or error_message:
+            status = "failed"
+        else:
+            status = "accepted"
         if status != "sent":
             log_event(
                 "whatsapp_template_not_confirmed_sent",
@@ -401,6 +401,7 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
                 channel_account=channel_account,
                 sent=sent_value,
                 delivery_status=delivery_status,
+                error=error_message,
                 frappe_result=json.dumps(result, default=str)[:1000],
                 idempotency_key=args.get("idempotency_key"),
             )
@@ -412,85 +413,15 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
             "channel_account": channel_account,
             "delivery_status": delivery_status or None,
             "sent": sent_value,
+            "error": error_message,
             "frappe_result": result,
         }
 
     return guarded_write("whatsapp", {**args, "phone": phone}, write)
 
 
-def create_or_update_lead(args: dict[str, Any]) -> dict[str, Any]:
-    phone = normalize_phone(args.get("phone") or args.get("mobile_no"))
-    first_name = str(args.get("first_name") or args.get("name") or "").strip()
-    if not phone:
-        return {"status": "failed", "error": "phone is required"}
-    if not first_name:
-        return {"status": "failed", "error": "first_name is required"}
-    doctype = os.getenv("FRAPPE_LEAD_DOCTYPE", "Lead")
-    phone_field = os.getenv("FRAPPE_LEAD_PHONE_FIELD", "mobile_no")
-    payload = {
-        "first_name": first_name,
-        "middle_name": args.get("middle_name") or "",
-        phone_field: phone,
-        "phone": phone,
-        "gender": args.get("gender") or "Male",
-        "sr_lead_message": args.get("sr_lead_message") or args.get("concern") or "",
-        "sr_lead_notes": args.get("sr_lead_notes") or "Lead generated from AI gateway",
-        "sr_lead_disease": args.get("sr_lead_disease") or "",
-        "sr_lead_country": args.get("sr_lead_country") or "India",
-    }
-
-    def write() -> dict[str, Any]:
-        search = frappe_request("GET", f"/api/resource/{doctype_path(doctype)}", params={"filters": json.dumps([[doctype, phone_field, "=", phone]]), "fields": json.dumps(["name"]), "limit_page_length": 1})
-        rows = search.get("data") or []
-        if rows:
-            name = rows[0]["name"]
-            frappe_request("PUT", f"/api/resource/{doctype_path(doctype)}/{name}", json_body=payload)
-            return {"status": "updated", "doctype": doctype, "name": name}
-        created = frappe_request("POST", f"/api/resource/{doctype_path(doctype)}", json_body=payload)
-        return {"status": "created", "doctype": doctype, "name": (created.get("data") or {}).get("name")}
-
-    return guarded_write("lead", {**args, "phone": phone}, write)
-
-
-def create_appointment(args: dict[str, Any]) -> dict[str, Any]:
-    phone = normalize_phone(args.get("phone"))
-    patient_name = str(args.get("patient_name") or "").strip()
-    preferred_time = str(args.get("preferred_time") or "").strip()
-    concern = str(args.get("concern") or "").strip()
-    missing = [name for name, value in {"phone": phone, "patient_name": patient_name, "preferred_time": preferred_time, "concern": concern}.items() if not value]
-    if missing:
-        return {"status": "failed", "error": f"missing required fields: {', '.join(missing)}"}
-    doctype = os.getenv("FRAPPE_APPOINTMENT_DOCTYPE", "Patient Appointment")
-    customer_email = str(args.get("customer_email") or args.get("email") or "").strip()
-    if not customer_email:
-        fallback_domain = os.getenv("FRAPPE_APPOINTMENT_EMAIL_DOMAIN", "sriaas.invalid")
-        customer_email = f"{phone.replace('+', '')}@{fallback_domain}"
-    payload = {
-        "scheduled_time": preferred_time,
-        "status": os.getenv("FRAPPE_APPOINTMENT_DEFAULT_STATUS", "Open"),
-        "customer_name": patient_name,
-        "customer_phone_number": phone,
-        "customer_email": customer_email,
-        "customer_details": concern,
-    }
-    appointment_with = os.getenv("FRAPPE_APPOINTMENT_WITH", "").strip()
-    party = os.getenv("FRAPPE_APPOINTMENT_PARTY", "").strip()
-    if appointment_with:
-        payload["appointment_with"] = appointment_with
-    if party:
-        payload["party"] = party
-
-    def write() -> dict[str, Any]:
-        created = frappe_request("POST", f"/api/resource/{doctype_path(doctype)}", json_body=payload)
-        return {"status": "accepted", "doctype": doctype, "name": (created.get("data") or {}).get("name")}
-
-    return guarded_write("appointment", {**args, "phone": phone}, write)
-
-
 TOOLS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "send_whatsapp_template": send_whatsapp_template,
-    "create_or_update_lead": create_or_update_lead,
-    "create_appointment": create_appointment,
 }
 
 
