@@ -25,9 +25,7 @@ Set these in `.env`:
 - `MCP_BEARER_TOKEN`
 - `FRAPPE_BASE_URL`
 - `FRAPPE_AUTHORIZATION`
-- `WA_DEFAULT_TEMPLATE`
-- `WA_DEFAULT_CHANNEL_ACCOUNT`
-- `WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON` if different voice profiles should send through different WhatsApp channel accounts
+- `WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON`
 
 ## Agent Endpoint
 
@@ -51,7 +49,6 @@ Example:
       "phone": "+919999999999",
       "profile_key": "male-kamal-sriaas",
       "message": "Clinic address: B-92, near Millennium City Centre Metro Station, Gurugram.",
-      "template_name": "vobiz_dg",
       "language_code": "en",
       "body_values": ["Clinic address: B-92, near Millennium City Centre Metro Station, Gurugram."],
       "agent_id": "vobiz-gemini-live",
@@ -73,18 +70,18 @@ Example:
 
 The gateway sends approved templates only. It does not send direct/free-text WhatsApp messages.
 
-Default template assumption:
+Template body assumption:
 
 ```text
 Hi, I am from SRIAAS {{1}}
 ```
 
-The agent's generated text is passed as the first body variable.
+The `template_name` comes from the matching profile config, and the agent's generated text is passed as the first body variable.
 
-To route WhatsApp sends by voice profile, set:
+To route WhatsApp sends by voice profile, set both the WhatsApp channel account and template in `WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON`:
 
 ```text
-WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON={"male-kamal-sriaas":"Interakt SRIAAS Male","female-megha-sriaas":"Interakt SRIAAS Female"}
+WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON={"male-kamal-sriaas":{"channel_account":"Interakt SRIAAS Male","template_name":"vobiz_ai","language_code":"en"},"female-megha-sriaas":{"channel_account":"Interakt SRIAAS Female","template_name":"vobiz_ai_female","language_code":"en"}}
 ```
 
-If a request includes `channel_account`, that explicit value wins. Otherwise MCP uses the profile mapping, then falls back to `WA_DEFAULT_CHANNEL_ACCOUNT`.
+If a request includes `channel_account` or `template_name`, that explicit value wins for that field. Otherwise MCP uses the profile mapping. Without a mapped or explicit channel/template, the send is rejected.

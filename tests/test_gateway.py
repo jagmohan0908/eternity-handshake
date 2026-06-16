@@ -34,6 +34,10 @@ def test_whatsapp_validates_template_variable_count():
 def test_whatsapp_frappe_failed_delivery_is_failed(monkeypatch):
     init_db()
 
+    monkeypatch.setenv(
+        "WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON",
+        json.dumps({"default-test-profile": {"channel_account": "Interakt SRIAAS Male", "template_name": "vobiz_ai"}}),
+    )
     monkeypatch.setattr(gateway, "resolve_or_create_conversation", lambda phone, channel: "conversation-1")
 
     def fake_frappe_request(method, path, *, json_body=None, params=None):
@@ -50,6 +54,7 @@ def test_whatsapp_frappe_failed_delivery_is_failed(monkeypatch):
 
     result = send_whatsapp_template(
         {
+            "profile_key": "default-test-profile",
             "phone": "+919999999999",
             "message": "Address",
             "body_values": ["Address"],
@@ -69,7 +74,15 @@ def test_whatsapp_uses_profile_channel_mapping(monkeypatch):
     captured = {}
     monkeypatch.setenv(
         "WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON",
-        json.dumps({"male-kamal-sriaas": "Interakt SRIAAS Male"}),
+        json.dumps(
+            {
+                "male-kamal-sriaas": {
+                    "channel_account": "Interakt SRIAAS Male",
+                    "template_name": "vobiz_ai",
+                    "language_code": "en",
+                }
+            }
+        ),
     )
     def fake_resolve_conversation(phone, channel):
         captured["channel"] = channel
@@ -103,5 +116,26 @@ def test_whatsapp_uses_profile_channel_mapping(monkeypatch):
 
     assert result["status"] == "sent"
     assert result["profile_key"] == "male-kamal-sriaas"
+    assert result["template_name"] == "vobiz_ai"
     assert result["channel_account"] == "Interakt SRIAAS Male"
     assert captured["channel"] == "Interakt SRIAAS Male"
+
+
+def test_whatsapp_rejects_missing_profile_template_and_channel(monkeypatch):
+    init_db()
+    monkeypatch.delenv("WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON", raising=False)
+
+    result = send_whatsapp_template(
+        {
+            "profile_key": "missing-profile",
+            "phone": "+919999999999",
+            "message": "Address",
+            "body_values": ["Address"],
+            "agent_id": "agent",
+            "call_id": "call-missing-profile-config",
+            "idempotency_key": "key-missing-profile-config",
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert "template_name is required" in result["error"]

@@ -174,14 +174,33 @@ def env_json_object(name: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def channel_account_for_request(args: dict[str, Any]) -> str:
+def profile_whatsapp_config(args: dict[str, Any]) -> dict[str, str]:
+    profile_key = profile_key_from_args(args)
+    profile_configs = env_json_object("WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON")
+    raw_config = profile_configs.get(profile_key) if profile_key else None
+    if isinstance(raw_config, dict):
+        return {
+            "channel_account": str(raw_config.get("channel_account") or raw_config.get("channel") or "").strip(),
+            "template_name": str(raw_config.get("template_name") or raw_config.get("template") or "").strip(),
+            "language_code": str(raw_config.get("language_code") or raw_config.get("language") or "").strip(),
+        }
+    if raw_config:
+        return {"channel_account": str(raw_config).strip(), "template_name": "", "language_code": ""}
+    return {"channel_account": "", "template_name": "", "language_code": ""}
+
+
+def channel_account_for_request(args: dict[str, Any], profile_config: dict[str, str]) -> str:
     explicit_channel = str(args.get("channel_account") or "").strip()
     if explicit_channel:
         return explicit_channel
-    profile_key = profile_key_from_args(args)
-    profile_channels = env_json_object("WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON")
-    mapped_channel = str(profile_channels.get(profile_key) or "").strip() if profile_key else ""
-    return mapped_channel or os.getenv("WA_DEFAULT_CHANNEL_ACCOUNT", "Interakt SRIAAS Male")
+    return profile_config.get("channel_account", "")
+
+
+def template_name_for_request(args: dict[str, Any], profile_config: dict[str, str]) -> str:
+    explicit_template = str(args.get("template_name") or "").strip()
+    if explicit_template:
+        return explicit_template
+    return profile_config.get("template_name", "")
 
 
 def reserve_limit(action: str, args: dict[str, Any]) -> dict[str, Any] | None:
@@ -377,10 +396,15 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
         return {"status": "failed", "error": "phone is required"}
     if not message:
         return {"status": "failed", "error": "message is required"}
-    template_name = args.get("template_name") or os.getenv("WA_DEFAULT_TEMPLATE", "vobiz_dg")
     profile_key = profile_key_from_args(args)
-    channel_account = channel_account_for_request(args)
-    language_code = args.get("language_code") or os.getenv("WA_DEFAULT_LANGUAGE", "en")
+    profile_config = profile_whatsapp_config(args)
+    template_name = template_name_for_request(args, profile_config)
+    channel_account = channel_account_for_request(args, profile_config)
+    language_code = args.get("language_code") or profile_config.get("language_code") or os.getenv("WA_DEFAULT_LANGUAGE", "en")
+    if not template_name:
+        return {"status": "failed", "error": f"template_name is required for profile: {profile_key or 'unknown'}"}
+    if not channel_account:
+        return {"status": "failed", "error": f"channel_account is required for profile: {profile_key or 'unknown'}"}
     body_values = args.get("body_values") or [message]
     expected_values = env_int("WA_TEMPLATE_VARIABLE_COUNT", 1)
     if not isinstance(body_values, list) or len(body_values) != expected_values:
