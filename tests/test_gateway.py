@@ -240,6 +240,28 @@ def test_did_profile_lookup_overrides_wrong_request_profile(monkeypatch):
     assert captured["template_body"]["template_name"] == "vobiz_seedfit_pg"
 
 
+def test_frappe_non_json_response_raises_frappe_error(monkeypatch):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b"<!doctype html><html>login</html>"
+
+    monkeypatch.setenv("FRAPPE_BASE_URL", "https://frappe.example.test")
+    monkeypatch.setattr(gateway, "urlopen", lambda request, timeout: FakeResponse())
+
+    try:
+        gateway.frappe_request("GET", "/api/method/test")
+    except gateway.FrappeError as exc:
+        assert "non-JSON response" in str(exc)
+    else:
+        raise AssertionError("Expected FrappeError")
+
+
 def test_whatsapp_rejects_missing_profile_template_and_channel(monkeypatch):
     init_db()
     monkeypatch.delenv("WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON", raising=False)

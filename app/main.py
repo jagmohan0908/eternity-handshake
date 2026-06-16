@@ -345,7 +345,10 @@ def frappe_request(method: str, path: str, *, json_body: dict[str, Any] | None =
     try:
         with urlopen(request, timeout=env_int("FRAPPE_TIMEOUT_SECONDS", 20)) as response:
             text = response.read().decode("utf-8")
-            data = json.loads(text) if text else {}
+            try:
+                data = json.loads(text) if text else {}
+            except json.JSONDecodeError as exc:
+                raise FrappeError(f"Frappe returned non-JSON response from {path}: {text[:300]}") from exc
     except HTTPError as exc:
         text = exc.read().decode("utf-8", errors="replace")
         if exc.code == 403 and ("error_code\":1010" in text or "browser_signature_banned" in text):
