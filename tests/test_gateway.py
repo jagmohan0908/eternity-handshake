@@ -308,6 +308,65 @@ def test_did_whatsapp_mapping_overrides_profile_channel(monkeypatch):
     assert captured["template_body"]["template_name"] == "vobiz_siya"
 
 
+def test_wrong_channel_resolved_conversation_is_not_used(monkeypatch):
+    init_db()
+    captured = {"created_conversations": []}
+    monkeypatch.setenv(
+        "WA_CHANNEL_ACCOUNTS_BY_DID_JSON",
+        json.dumps(
+            {
+                "+919262171487": {
+                    "profile_key": "seedfit-agent",
+                    "channel_account": "seedfit-interakt",
+                    "template_name": "vobiz_seedfit_pg",
+                    "language_code": "en",
+                }
+            }
+        ),
+    )
+
+    def fake_frappe_request(method, path, *, json_body=None, params=None):
+        if path.endswith("/wa_chat_hub.api.chat.resolve_chat_for_reference"):
+            return {"message": {"conversation": "223"}}
+        if path == "/api/resource/Chat%20Conversation/223":
+            return {"data": {"name": "223", "channel_account": "sriaas-test", "contact": "contact-1"}}
+        if method == "POST" and path == "/api/resource/Chat%20Conversation":
+            captured["created_conversations"].append(json_body)
+            return {"data": {"name": "224"}}
+        if path.endswith("/wa_chat_hub.api.runtime.send_template_message"):
+            captured["template_body"] = json_body
+            return {
+                "message": {
+                    "conversation": json_body["conversation"],
+                    "sent": True,
+                    "delivery_status": "Sent",
+                }
+            }
+        raise AssertionError(f"Unexpected request {method} {path}")
+
+    monkeypatch.setattr(gateway, "frappe_request", fake_frappe_request)
+
+    result = send_whatsapp_template(
+        {
+            "profile_key": "seedfit-agent",
+            "did_number": "+919262171487",
+            "phone": "+919873090386",
+            "message": "Address",
+            "body_values": ["Address"],
+            "agent_id": "agent",
+            "call_id": "call-wrong-channel-conversation",
+            "idempotency_key": "key-wrong-channel-conversation",
+        }
+    )
+
+    assert result["status"] == "sent"
+    assert result["conversation"] == "224"
+    assert captured["created_conversations"] == [
+        {"channel_account": "seedfit-interakt", "contact": "contact-1", "status": "Open"}
+    ]
+    assert captured["template_body"]["conversation"] == "224"
+
+
 def test_frappe_non_json_response_raises_frappe_error(monkeypatch):
     class FakeResponse:
         def __enter__(self):

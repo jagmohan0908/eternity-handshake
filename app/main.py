@@ -8,7 +8,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -421,10 +421,53 @@ def unwrap_result(data: dict[str, Any]) -> dict[str, Any]:
     return message if isinstance(message, dict) else {}
 
 
+def chat_conversation_detail(conversation: str) -> dict[str, Any]:
+    if not conversation:
+        return {}
+    try:
+        data = frappe_request("GET", f"/api/resource/Chat%20Conversation/{quote(str(conversation), safe='')}")
+    except FrappeError as exc:
+        log_event(
+            "conversation_detail_lookup_failed",
+            conversation=conversation,
+            error=str(exc)[:300],
+        )
+        return {}
+    detail = data.get("data") if isinstance(data, dict) else {}
+    return detail if isinstance(detail, dict) else {}
+
+
+def same_channel(left: str | None, right: str | None) -> bool:
+    return str(left or "").strip().lower() == str(right or "").strip().lower()
+
+
+def create_conversation_for_channel(contact_name: str, phone: str, channel_account: str) -> str:
+    contact = contact_name
+    if not contact:
+        try:
+            contact_data = frappe_request("POST", "/api/resource/Chat%20Contact", json_body={"phone_number": phone, "display_name": phone})
+            contact = (contact_data.get("data") or {}).get("name") or phone
+        except FrappeError:
+            contact = phone
+
+    convo_data = frappe_request("POST", "/api/resource/Chat%20Conversation", json_body={"channel_account": channel_account, "contact": contact, "status": "Open"})
+    conversation = (convo_data.get("data") or {}).get("name")
+    if not conversation:
+        raise FrappeError("Could not resolve or create Chat Conversation")
+    log_event(
+        "conversation_created_for_channel",
+        conversation=conversation,
+        contact=contact,
+        channel_account=channel_account,
+    )
+    return str(conversation)
+
+
 def resolve_or_create_conversation(phone: str, channel_account: str) -> str:
     cleaned = normalize_phone(phone)
     candidates = [phone, cleaned, cleaned.removeprefix("+")]
     seen: set[str] = set()
+    fallback_contact = ""
     for candidate in candidates:
         if not candidate or candidate in seen:
             continue
@@ -434,21 +477,23 @@ def resolve_or_create_conversation(phone: str, channel_account: str) -> str:
             "/api/method/wa_chat_hub.api.chat.resolve_chat_for_reference",
             json_body={"reference_doctype": "Chat Contact", "phone_number": candidate, "channel_account": channel_account},
         )
-        conversation = unwrap_result(data).get("conversation") or unwrap_result(data).get("conversation_name") or unwrap_result(data).get("chat_conversation")
+        result = unwrap_result(data)
+        conversation = result.get("conversation") or result.get("conversation_name") or result.get("chat_conversation")
         if conversation:
-            return str(conversation)
+            detail = chat_conversation_detail(str(conversation))
+            actual_channel = detail.get("channel_account") or result.get("channel_account")
+            fallback_contact = str(detail.get("contact") or result.get("contact") or fallback_contact or "").strip()
+            if same_channel(actual_channel, channel_account):
+                return str(conversation)
+            log_event(
+                "conversation_channel_mismatch",
+                conversation=conversation,
+                expected_channel=channel_account,
+                actual_channel=actual_channel or None,
+                contact=fallback_contact or None,
+            )
 
-    try:
-        contact_data = frappe_request("POST", "/api/resource/Chat%20Contact", json_body={"phone_number": cleaned or phone, "display_name": cleaned or phone})
-        contact_name = (contact_data.get("data") or {}).get("name") or cleaned or phone
-    except FrappeError:
-        contact_name = cleaned or phone
-
-    convo_data = frappe_request("POST", "/api/resource/Chat%20Conversation", json_body={"channel_account": channel_account, "contact": contact_name, "status": "Open"})
-    conversation = (convo_data.get("data") or {}).get("name")
-    if not conversation:
-        raise FrappeError("Could not resolve or create Chat Conversation")
-    return str(conversation)
+    return create_conversation_for_channel(fallback_contact, cleaned or phone, channel_account)
 
 
 def guarded_write(action: str, args: dict[str, Any], fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
