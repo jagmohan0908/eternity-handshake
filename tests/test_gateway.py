@@ -176,6 +176,70 @@ def test_profile_mapping_overrides_request_channel_and_template(monkeypatch):
     assert captured["template_body"]["template_name"] == "vobiz_seedfit_pg"
 
 
+def test_did_profile_lookup_overrides_wrong_request_profile(monkeypatch):
+    init_db()
+    captured = {}
+    monkeypatch.setenv(
+        "WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON",
+        json.dumps(
+            {
+                "siya-agent": {
+                    "channel_account": "sriaas-test",
+                    "template_name": "vobiz_ai",
+                    "language_code": "en",
+                },
+                "seedfit-agent": {
+                    "channel_account": "seedfit-interakt",
+                    "template_name": "vobiz_seedfit_pg",
+                    "language_code": "en",
+                },
+            }
+        ),
+    )
+
+    def fake_resolve_conversation(phone, channel):
+        captured["channel"] = channel
+        return "conversation-1"
+
+    monkeypatch.setattr(gateway, "resolve_or_create_conversation", fake_resolve_conversation)
+
+    def fake_frappe_request(method, path, *, json_body=None, params=None):
+        if path.endswith("/vobiz_ai.api.voice_agent.get_voice_agent_config"):
+            captured["profile_lookup_params"] = params
+            return {"message": {"profile_key": "seedfit-agent"}}
+        captured["template_body"] = json_body
+        return {
+            "message": {
+                "conversation": "conversation-1",
+                "sent": True,
+                "delivery_status": "Sent",
+            }
+        }
+
+    monkeypatch.setattr(gateway, "frappe_request", fake_frappe_request)
+
+    result = send_whatsapp_template(
+        {
+            "profile_key": "siya-agent",
+            "did_number": "+919262171487",
+            "phone": "+919873090386",
+            "message": "Address",
+            "body_values": ["Address"],
+            "agent_id": "agent",
+            "call_id": "call-did-profile-override",
+            "idempotency_key": "key-did-profile-override",
+        }
+    )
+
+    assert result["status"] == "sent"
+    assert result["profile_key"] == "seedfit-agent"
+    assert result["channel_account"] == "seedfit-interakt"
+    assert result["template_name"] == "vobiz_seedfit_pg"
+    assert captured["profile_lookup_params"]["did_number"] == "+919262171487"
+    assert captured["channel"] == "seedfit-interakt"
+    assert captured["template_body"]["template_name"] == "vobiz_seedfit_pg"
+
+
 def test_whatsapp_rejects_missing_profile_template_and_channel(monkeypatch):
     init_db()
     monkeypatch.delenv("WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON", raising=False)

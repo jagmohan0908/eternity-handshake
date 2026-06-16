@@ -162,6 +162,14 @@ def profile_key_from_args(args: dict[str, Any]) -> str:
     return ""
 
 
+def did_number_from_args(args: dict[str, Any]) -> str:
+    for key in ("did_number", "didNumber", "sip_called_number", "sipCalledNumber", "called_number", "calledNumber"):
+        value = str(args.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def env_json_object(name: str) -> dict[str, Any]:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -174,8 +182,46 @@ def env_json_object(name: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def profile_whatsapp_config(args: dict[str, Any]) -> dict[str, str]:
-    profile_key = profile_key_from_args(args)
+def resolve_profile_key_for_request(args: dict[str, Any]) -> str:
+    requested_profile_key = profile_key_from_args(args)
+    did_number = did_number_from_args(args)
+    if not did_number:
+        return requested_profile_key
+
+    method = os.getenv("FRAPPE_VOICE_AGENT_CONFIG_METHOD", "vobiz_ai.api.voice_agent.get_voice_agent_config").strip().strip("/")
+    params = {
+        "profile_key": requested_profile_key,
+        "voice_agent_profile": requested_profile_key,
+        "did_number": did_number,
+        "caller_phone": args.get("phone") or "",
+        "company_key": args.get("company_key") or args.get("companyKey") or "",
+    }
+    try:
+        payload = frappe_request("GET", f"/api/method/{method}", params=params)
+    except FrappeError as exc:
+        log_event(
+            "voice_profile_lookup_failed",
+            profile_key=requested_profile_key,
+            did_number=did_number,
+            error=str(exc)[:300],
+        )
+        return requested_profile_key
+
+    config = payload.get("message") if isinstance(payload, dict) else payload
+    if not isinstance(config, dict):
+        return requested_profile_key
+    resolved_profile_key = str(config.get("profile_key") or config.get("profileKey") or "").strip()
+    if resolved_profile_key and resolved_profile_key != requested_profile_key:
+        log_event(
+            "voice_profile_resolved_from_did",
+            requested_profile_key=requested_profile_key,
+            resolved_profile_key=resolved_profile_key,
+            did_number=did_number,
+        )
+    return resolved_profile_key or requested_profile_key
+
+
+def profile_whatsapp_config(profile_key: str) -> dict[str, str]:
     profile_configs = env_json_object("WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON")
     raw_config = profile_configs.get(profile_key) if profile_key else None
     if isinstance(raw_config, dict):
@@ -398,8 +444,8 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
         return {"status": "failed", "error": "phone is required"}
     if not message:
         return {"status": "failed", "error": "message is required"}
-    profile_key = profile_key_from_args(args)
-    profile_config = profile_whatsapp_config(args)
+    profile_key = resolve_profile_key_for_request(args)
+    profile_config = profile_whatsapp_config(profile_key)
     template_name = template_name_for_request(args, profile_config)
     channel_account = channel_account_for_request(args, profile_config)
     language_code = args.get("language_code") or profile_config.get("language_code") or os.getenv("WA_DEFAULT_LANGUAGE", "en")

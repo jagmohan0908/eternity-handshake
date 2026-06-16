@@ -48,6 +48,7 @@ Example:
     "arguments": {
       "phone": "+919999999999",
       "profile_key": "male-kamal-sriaas",
+      "did_number": "+919262171487",
       "message": "Clinic address: B-92, near Millennium City Centre Metro Station, Gurugram.",
       "language_code": "en",
       "body_values": ["Clinic address: B-92, near Millennium City Centre Metro Station, Gurugram."],
@@ -85,3 +86,5 @@ WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON={"male-kamal-sriaas":{"channel_account":"Int
 ```
 
 When `profile_key` matches `WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON`, that profile mapping wins for `channel_account` and `template_name`. Request values are only used as fallback when the matching profile does not define that field. Without a mapped or explicit channel/template, the send is rejected.
+
+If `did_number` is included, MCP first asks Frappe's voice-agent config API to resolve the true profile for that DID, then uses that resolved profile for WhatsApp routing.
