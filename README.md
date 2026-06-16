@@ -27,6 +27,7 @@ Set these in `.env`:
 - `FRAPPE_AUTHORIZATION`
 - `WA_DEFAULT_TEMPLATE`
 - `WA_DEFAULT_CHANNEL_ACCOUNT`
+- `WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON` if different voice profiles should send through different WhatsApp channel accounts
 
 ## Agent Endpoint
 
@@ -48,9 +49,9 @@ Example:
     "name": "send_whatsapp_template",
     "arguments": {
       "phone": "+919999999999",
+      "profile_key": "male-kamal-sriaas",
       "message": "Clinic address: B-92, near Millennium City Centre Metro Station, Gurugram.",
       "template_name": "vobiz_dg",
-      "channel_account": "Interakt SRIAAS Male",
       "language_code": "en",
       "body_values": ["Clinic address: B-92, near Millennium City Centre Metro Station, Gurugram."],
       "agent_id": "vobiz-gemini-live",
@@ -79,3 +80,11 @@ Hi, I am from SRIAAS {{1}}
 ```
 
 The agent's generated text is passed as the first body variable.
+
+To route WhatsApp sends by voice profile, set:
+
+```text
+WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON={"male-kamal-sriaas":"Interakt SRIAAS Male","female-megha-sriaas":"Interakt SRIAAS Female"}
+```
+
+If a request includes `channel_account`, that explicit value wins. Otherwise MCP uses the profile mapping, then falls back to `WA_DEFAULT_CHANNEL_ACCOUNT`.

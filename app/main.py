@@ -154,6 +154,36 @@ def limit_for_action(action: str) -> int:
     }.get(action, 1)
 
 
+def profile_key_from_args(args: dict[str, Any]) -> str:
+    for key in ("profile_key", "profileKey", "voice_agent_profile", "voiceAgentProfile"):
+        value = str(args.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def env_json_object(name: str) -> dict[str, Any]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        log_event("env_config_error", variable=name, error="not_valid_json")
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def channel_account_for_request(args: dict[str, Any]) -> str:
+    explicit_channel = str(args.get("channel_account") or "").strip()
+    if explicit_channel:
+        return explicit_channel
+    profile_key = profile_key_from_args(args)
+    profile_channels = env_json_object("WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON")
+    mapped_channel = str(profile_channels.get(profile_key) or "").strip() if profile_key else ""
+    return mapped_channel or os.getenv("WA_DEFAULT_CHANNEL_ACCOUNT", "Interakt SRIAAS Male")
+
+
 def reserve_limit(action: str, args: dict[str, Any]) -> dict[str, Any] | None:
     agent_id = str(args.get("agent_id") or "unknown-agent")
     call_id = str(args.get("call_id") or "unknown-call")
@@ -348,7 +378,8 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
     if not message:
         return {"status": "failed", "error": "message is required"}
     template_name = args.get("template_name") or os.getenv("WA_DEFAULT_TEMPLATE", "vobiz_dg")
-    channel_account = args.get("channel_account") or os.getenv("WA_DEFAULT_CHANNEL_ACCOUNT", "Interakt SRIAAS Male")
+    profile_key = profile_key_from_args(args)
+    channel_account = channel_account_for_request(args)
     language_code = args.get("language_code") or os.getenv("WA_DEFAULT_LANGUAGE", "en")
     body_values = args.get("body_values") or [message]
     expected_values = env_int("WA_TEMPLATE_VARIABLE_COUNT", 1)
@@ -359,6 +390,7 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
         conversation = resolve_or_create_conversation(phone, str(channel_account))
         log_event(
             "whatsapp_template_request",
+            profile_key=profile_key,
             phone_suffix=phone[-4:],
             conversation=conversation,
             template_name=template_name,
@@ -395,6 +427,7 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
         if status != "sent":
             log_event(
                 "whatsapp_template_not_confirmed_sent",
+                profile_key=profile_key,
                 phone_suffix=phone[-4:],
                 conversation=result.get("conversation") or conversation,
                 template_name=template_name,
@@ -409,6 +442,7 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
             "status": status,
             "conversation": result.get("conversation") or conversation,
             "message": result.get("message"),
+            "profile_key": profile_key or None,
             "template_name": template_name,
             "channel_account": channel_account,
             "delivery_status": delivery_status or None,

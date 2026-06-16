@@ -1,4 +1,5 @@
 import os
+import json
 
 os.environ.setdefault("MCP_BEARER_TOKEN", "test-token")
 os.environ.setdefault("MCP_DB_PATH", "data/test_gateway.sqlite3")
@@ -61,3 +62,46 @@ def test_whatsapp_frappe_failed_delivery_is_failed(monkeypatch):
     assert result["status"] == "failed"
     assert result["delivery_status"] == "failed"
     assert result["error"] == "No approved template found"
+
+
+def test_whatsapp_uses_profile_channel_mapping(monkeypatch):
+    init_db()
+    captured = {}
+    monkeypatch.setenv(
+        "WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON",
+        json.dumps({"male-kamal-sriaas": "Interakt SRIAAS Male"}),
+    )
+    def fake_resolve_conversation(phone, channel):
+        captured["channel"] = channel
+        return "conversation-1"
+
+    monkeypatch.setattr(gateway, "resolve_or_create_conversation", fake_resolve_conversation)
+
+    def fake_frappe_request(method, path, *, json_body=None, params=None):
+        captured["template_body"] = json_body
+        return {
+            "message": {
+                "conversation": "conversation-1",
+                "sent": True,
+                "delivery_status": "Sent",
+            }
+        }
+
+    monkeypatch.setattr(gateway, "frappe_request", fake_frappe_request)
+
+    result = send_whatsapp_template(
+        {
+            "profile_key": "male-kamal-sriaas",
+            "phone": "+919999999999",
+            "message": "Address",
+            "body_values": ["Address"],
+            "agent_id": "agent",
+            "call_id": "call-profile-channel",
+            "idempotency_key": "key-profile-channel",
+        }
+    )
+
+    assert result["status"] == "sent"
+    assert result["profile_key"] == "male-kamal-sriaas"
+    assert result["channel_account"] == "Interakt SRIAAS Male"
+    assert captured["channel"] == "Interakt SRIAAS Male"
