@@ -190,17 +190,19 @@ def profile_whatsapp_config(args: dict[str, Any]) -> dict[str, str]:
 
 
 def channel_account_for_request(args: dict[str, Any], profile_config: dict[str, str]) -> str:
+    mapped_channel = profile_config.get("channel_account", "")
+    if mapped_channel:
+        return mapped_channel
     explicit_channel = str(args.get("channel_account") or "").strip()
-    if explicit_channel:
-        return explicit_channel
-    return profile_config.get("channel_account", "")
+    return explicit_channel
 
 
 def template_name_for_request(args: dict[str, Any], profile_config: dict[str, str]) -> str:
+    mapped_template = profile_config.get("template_name", "")
+    if mapped_template:
+        return mapped_template
     explicit_template = str(args.get("template_name") or "").strip()
-    if explicit_template:
-        return explicit_template
-    return profile_config.get("template_name", "")
+    return explicit_template
 
 
 def reserve_limit(action: str, args: dict[str, Any]) -> dict[str, Any] | None:

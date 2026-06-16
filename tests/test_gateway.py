@@ -121,6 +121,61 @@ def test_whatsapp_uses_profile_channel_mapping(monkeypatch):
     assert captured["channel"] == "Interakt SRIAAS Male"
 
 
+def test_profile_mapping_overrides_request_channel_and_template(monkeypatch):
+    init_db()
+    captured = {}
+    monkeypatch.setenv(
+        "WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON",
+        json.dumps(
+            {
+                "seedfit-agent": {
+                    "channel_account": "seedfit-interakt",
+                    "template_name": "vobiz_seedfit_pg",
+                    "language_code": "en",
+                }
+            }
+        ),
+    )
+
+    def fake_resolve_conversation(phone, channel):
+        captured["channel"] = channel
+        return "conversation-1"
+
+    monkeypatch.setattr(gateway, "resolve_or_create_conversation", fake_resolve_conversation)
+
+    def fake_frappe_request(method, path, *, json_body=None, params=None):
+        captured["template_body"] = json_body
+        return {
+            "message": {
+                "conversation": "conversation-1",
+                "sent": True,
+                "delivery_status": "Sent",
+            }
+        }
+
+    monkeypatch.setattr(gateway, "frappe_request", fake_frappe_request)
+
+    result = send_whatsapp_template(
+        {
+            "profile_key": "seedfit-agent",
+            "phone": "+919873090386",
+            "message": "Address",
+            "body_values": ["Address"],
+            "channel_account": "sriaas-test",
+            "template_name": "wrong_template",
+            "agent_id": "agent",
+            "call_id": "call-profile-override",
+            "idempotency_key": "key-profile-override",
+        }
+    )
+
+    assert result["status"] == "sent"
+    assert result["channel_account"] == "seedfit-interakt"
+    assert result["template_name"] == "vobiz_seedfit_pg"
+    assert captured["channel"] == "seedfit-interakt"
+    assert captured["template_body"]["template_name"] == "vobiz_seedfit_pg"
+
+
 def test_whatsapp_rejects_missing_profile_template_and_channel(monkeypatch):
     init_db()
     monkeypatch.delenv("WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON", raising=False)

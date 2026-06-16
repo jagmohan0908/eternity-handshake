@@ -84,4 +84,4 @@ To route WhatsApp sends by voice profile, set both the WhatsApp channel account 
 WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON={"male-kamal-sriaas":{"channel_account":"Interakt SRIAAS Male","template_name":"vobiz_ai","language_code":"en"},"female-megha-sriaas":{"channel_account":"Interakt SRIAAS Female","template_name":"vobiz_ai_female","language_code":"en"}}
 ```
 
-If a request includes `channel_account` or `template_name`, that explicit value wins for that field. Otherwise MCP uses the profile mapping. Without a mapped or explicit channel/template, the send is rejected.
+When `profile_key` matches `WA_CHANNEL_ACCOUNTS_BY_PROFILE_JSON`, that profile mapping wins for `channel_account` and `template_name`. Request values are only used as fallback when the matching profile does not define that field. Without a mapped or explicit channel/template, the send is rejected.
