@@ -485,6 +485,22 @@ def same_phone(left: str | None, right: str | None) -> bool:
     return left_phone == right_phone or left_phone[-10:] == right_phone[-10:]
 
 
+def conversation_recipient_info(conversation: str, requested_phone: str) -> dict[str, Any]:
+    detail = chat_conversation_detail(conversation)
+    contact = str(detail.get("contact") or "").strip()
+    contact_detail = chat_contact_detail(contact)
+    contact_phones = contact_phone_candidates(contact_detail, contact)
+    primary_contact_phone = contact_phones[0] if contact_phones else ""
+    return {
+        "requested_recipient_phone": normalize_phone(requested_phone),
+        "requested_recipient_phone_suffix": normalize_phone(requested_phone)[-4:],
+        "conversation_contact": contact or None,
+        "conversation_contact_phone": primary_contact_phone or None,
+        "conversation_contact_phone_suffix": primary_contact_phone[-4:] if primary_contact_phone else None,
+        "conversation_contact_phone_matches": any(same_phone(requested_phone, contact_phone) for contact_phone in contact_phones) if contact_phones else None,
+    }
+
+
 def create_conversation_for_channel(contact_name: str, phone: str, channel_account: str) -> str:
     contact = contact_name
     if not contact:
@@ -624,10 +640,15 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
 
     def write() -> dict[str, Any]:
         conversation = resolve_or_create_conversation(phone, str(channel_account))
+        recipient_info = conversation_recipient_info(conversation, phone)
         log_event(
             "whatsapp_template_request",
             profile_key=profile_key,
             phone_suffix=phone[-4:],
+            requested_recipient_phone=recipient_info.get("requested_recipient_phone"),
+            conversation_contact=recipient_info.get("conversation_contact"),
+            conversation_contact_phone=recipient_info.get("conversation_contact_phone"),
+            conversation_contact_phone_matches=recipient_info.get("conversation_contact_phone_matches"),
             conversation=conversation,
             template_name=template_name,
             channel_account=channel_account,
@@ -665,6 +686,10 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
                 "whatsapp_template_not_confirmed_sent",
                 profile_key=profile_key,
                 phone_suffix=phone[-4:],
+                requested_recipient_phone=recipient_info.get("requested_recipient_phone"),
+                conversation_contact=recipient_info.get("conversation_contact"),
+                conversation_contact_phone=recipient_info.get("conversation_contact_phone"),
+                conversation_contact_phone_matches=recipient_info.get("conversation_contact_phone_matches"),
                 conversation=result.get("conversation") or conversation,
                 template_name=template_name,
                 channel_account=channel_account,
@@ -681,6 +706,10 @@ def send_whatsapp_template(args: dict[str, Any]) -> dict[str, Any]:
             "profile_key": profile_key or None,
             "template_name": template_name,
             "channel_account": channel_account,
+            "requested_recipient_phone": recipient_info.get("requested_recipient_phone"),
+            "conversation_contact": recipient_info.get("conversation_contact"),
+            "conversation_contact_phone": recipient_info.get("conversation_contact_phone"),
+            "conversation_contact_phone_matches": recipient_info.get("conversation_contact_phone_matches"),
             "delivery_status": delivery_status or None,
             "sent": sent_value,
             "error": error_message,

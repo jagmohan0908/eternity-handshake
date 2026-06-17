@@ -330,6 +330,10 @@ def test_wrong_channel_resolved_conversation_is_not_used(monkeypatch):
             return {"message": {"conversation": "223"}}
         if path == "/api/resource/Chat%20Conversation/223":
             return {"data": {"name": "223", "channel_account": "sriaas-test", "contact": "contact-1"}}
+        if path == "/api/resource/Chat%20Conversation/224":
+            return {"data": {"name": "224", "channel_account": "seedfit-interakt", "contact": "contact-1"}}
+        if path == "/api/resource/Chat%20Contact/contact-1":
+            return {"data": {"name": "contact-1", "phone_number": "+919873090386"}}
         if method == "POST" and path == "/api/resource/Chat%20Conversation":
             captured["created_conversations"].append(json_body)
             return {"data": {"name": "224"}}
@@ -391,6 +395,10 @@ def test_wrong_contact_resolved_conversation_is_not_used(monkeypatch):
             return {"data": {"name": "47239", "channel_account": "SRIAAS Parkinsons", "contact": "contact-wrong"}}
         if path == "/api/resource/Chat%20Contact/contact-wrong":
             return {"data": {"name": "contact-wrong", "phone_number": "+919999990000"}}
+        if path == "/api/resource/Chat%20Conversation/47240":
+            return {"data": {"name": "47240", "channel_account": "SRIAAS Parkinsons", "contact": "contact-correct"}}
+        if path == "/api/resource/Chat%20Contact/contact-correct":
+            return {"data": {"name": "contact-correct", "phone_number": "+919873090498"}}
         if method == "POST" and path == "/api/resource/Chat%20Contact":
             captured["created_contact"] = json_body
             return {"data": {"name": "contact-correct"}}
@@ -430,6 +438,8 @@ def test_wrong_contact_resolved_conversation_is_not_used(monkeypatch):
         {"channel_account": "SRIAAS Parkinsons", "contact": "contact-correct", "status": "Open"}
     ]
     assert captured["template_body"]["conversation"] == "47240"
+    assert result["conversation_contact_phone"] == "+919873090498"
+    assert result["conversation_contact_phone_matches"] is True
 
 
 def test_frappe_non_json_response_raises_frappe_error(monkeypatch):
