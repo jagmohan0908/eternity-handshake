@@ -729,11 +729,19 @@ class McpHandler(BaseHTTPRequestHandler):
 
     def send_json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, default=str).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as exc:
+            log_event(
+                "client_disconnected_before_response",
+                path=self.path,
+                status=status,
+                error=str(exc),
+            )
 
     def do_GET(self) -> None:
         if self.path == "/health":
